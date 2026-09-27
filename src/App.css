@@ -197,24 +197,36 @@ html, body {
 }
     /* --- CORREÇÃO DE RESPONSIVIDADE PARA TELEMÓVEL --- */
 
-/* 1. Impede a barra branca e o scroll horizontal no ecrã */
+/* Bloqueia o transbordo lateral que cria a barra branca */
 html, body {
     max-width: 100vw;
     overflow-x: hidden !important;
+    margin: 0;
+    padding: 0;
 }
 
-/* 2. Ajusta a barra superior para não estourar a tela no telemóvel */
-header, nav, .navbar, .top-bar {
-    display: flex;
-    flex-wrap: wrap;
-    max-width: 100%;
+/* Faz os containers principais usarem a largura total */
+#root, .app-container, main {
+    width: 100%;
+    max-width: 100vw;
     box-sizing: border-box;
 }
 
-/* 3. Permite rolar apenas os botões da barra em ecrãs pequenos */
+/* Regras específicas para telemóveis (telas com menos de 768px) */
 @media (max-width: 768px) {
+    /* Transforma a barra de botões do topo num menu de rolagem horizontal suave */
     header, nav, .navbar {
-        overflow-x: auto;
+        display: flex !important;
+        overflow-x: auto !important;
         white-space: nowrap;
+        max-width: 100% !important;
+        padding: 8px;
+        -webkit-overflow-scrolling: touch; /* Rolagem suave no iOS */
+    }
+
+    /* Reduz tamanhos de padding e fontes para caber melhor */
+    .card, .container {
+        padding: 12px !important;
+        margin: 8px 0 !important;
     }
 }
