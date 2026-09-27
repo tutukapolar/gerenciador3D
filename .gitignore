@@ -22,3 +22,10 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+# Ignorar env e arquivos do bot
+.env
+.env.*
+bot-whatsapp/.env
+bot-whatsapp/node_modules
+bot-whatsapp/.wwebjs_auth
+bot-whatsapp/.wwebjs_cache

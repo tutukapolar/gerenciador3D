@@ -37,10 +37,72 @@ import {
   Bug,
   Send,
   ThumbsUp,
-  Wand2
+  Wand2,
+  QrCode
 } from 'lucide-react';
 
+// E-mail de administrador configurado
+const ADMIN_EMAIL = 'ytty8229@gmail.com';
+
+// --- PASSO 1: GERADOR DE PAYLOAD E CRC16 PIX NO FRONTEND ---
+function crc16ccitt(str) {
+  let crc = 0xFFFF;
+  for (let c = 0; c < str.length; c++) {
+    crc ^= str.charCodeAt(c) << 8;
+    for (let i = 0; i < 8; i++) {
+      if ((crc & 0x8000) !== 0) {
+        crc = ((crc << 1) ^ 0x1021) & 0xFFFF;
+      } else {
+        crc = (crc << 1) & 0xFFFF;
+      }
+    }
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+function formatarCampo(id, valor) {
+  const len = valor.length.toString().padStart(2, '0');
+  return `${id}${len}${valor}`;
+}
+
+function removerAcentos(texto) {
+  return texto ? texto.normalize("NFD").replace(/[\u0300-\u036f]/g, "") : "";
+}
+
+function gerarPayloadPix({ chave, nome, cidade, valor, txid = "***" }) {
+  const nomeLimpo = removerAcentos(nome).substring(0, 25);
+  const cidadeLimpa = removerAcentos(cidade).substring(0, 15);
+  const valorFormatado = parseFloat(valor).toFixed(2);
+
+  const merchantAccountInfo = 
+    formatarCampo("00", "br.gov.bcb.pix") + 
+    formatarCampo("01", chave);
+
+  let payload = 
+    formatarCampo("00", "01") +
+    formatarCampo("26", merchantAccountInfo) +
+    formatarCampo("52", "0000") +
+    formatarCampo("53", "986") +
+    formatarCampo("54", valorFormatado) +
+    formatarCampo("58", "BR") +
+    formatarCampo("59", nomeLimpo) +
+    formatarCampo("60", cidadeLimpa) +
+    formatarCampo("62", formatarCampo("05", txid));
+
+  payload += "6304";
+  const checksum = crc16ccitt(payload);
+  return payload + checksum;
+}
+
 export default function App() {
+
+  // Informações do PIX
+  const CHAVE_PIX = "192c8e91-54c8-4c1d-a48f-68397556353e";
+  const NOME_RECEBEDOR = "Arthur Corrêa Sousa";
+  const CIDADE_RECEBEDOR = "Guaratinguetá";
+  const VALOR_PRO = 19.90;
+  const SEU_NUMERO_WHATSAPP = "5512988289882";
+
   const [session, setSession] = useState(null);
   const [loading, setLoading] = useState(true);
   const [abaAtiva, setAbaAtiva] = useState('dashboard');
@@ -58,6 +120,7 @@ export default function App() {
   const [novaAvaliacao, setNovaAvaliacao] = useState({ nome: '', nota: 5, comentario: '' });
   const [formFeedback, setFormFeedback] = useState({ tipo: 'sugestao', email: '', mensagem: '' });
   const [feedbackSucesso, setFeedbackSucesso] = useState('');
+  const [feedbacksAdminList, setFeedbacksAdminList] = useState([]);
 
   // --- MÁQUINAS / PRINT FARM ---
   const [impressoras, setImpressoras] = useState([]);
@@ -109,19 +172,34 @@ export default function App() {
   // --- ESTADO DA ABA ANÚNCIOS ---
   const [produtoAnuncioId, setProdutoAnuncioId] = useState('');
   const [copiado, setCopiado] = useState(false);
+  const [copiadoPix, setCopiadoPix] = useState(false);
   const [gerandoIA, setGerandoIA] = useState(false);
   const [textoAnuncioGerado, setTextoAnuncioGerado] = useState('');
+
+  // Payload do PIX do Passo 1
+  const payloadPix = gerarPayloadPix({
+    chave: CHAVE_PIX,
+    nome: NOME_RECEBEDOR,
+    cidade: CIDADE_RECEBEDOR,
+    valor: VALOR_PRO
+  });
+
+  const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=${encodeURIComponent(payloadPix)}`;
 
   useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, currentSession) => {
       setSession(currentSession);
       if (currentSession) {
         carregarDados(currentSession.user.id);
+        if (currentSession.user.email === ADMIN_EMAIL) {
+          carregarFeedbacksAdmin();
+        }
       } else {
         setImpressoras([]);
         setFilamentos([]);
         setProdutos([]);
         setEncomendas([]);
+        setFeedbacksAdminList([]);
       }
       carregarAvaliacoes();
       setLoading(false);
@@ -136,6 +214,15 @@ export default function App() {
       if (data) setAvaliacoesList(data);
     } catch (err) {
       console.log('Tabela de avaliações não encontrada ou vazia.');
+    }
+  };
+
+  const carregarFeedbacksAdmin = async () => {
+    try {
+      const { data } = await supabase.from('feedbacks').select('*').order('created_at', { ascending: false });
+      if (data) setFeedbacksAdminList(data);
+    } catch (err) {
+      console.log('Tabela de feedbacks não encontrada ou vazia.');
     }
   };
 
@@ -214,12 +301,18 @@ export default function App() {
     e.preventDefault();
     if (!formFeedback.mensagem) return;
 
+    const emailEnviar = session?.user?.email || formFeedback.email || 'Anônimo';
+
     try {
-      await supabase.from('feedbacks').insert([{
+      const { data, error } = await supabase.from('feedbacks').insert([{
         tipo: formFeedback.tipo,
-        email: formFeedback.email,
+        email: emailEnviar,
         mensagem: formFeedback.mensagem
-      }]);
+      }]).select();
+
+      if (!error && data && session?.user?.email === ADMIN_EMAIL) {
+        setFeedbacksAdminList([data[0], ...feedbacksAdminList]);
+      }
     } catch (err) {
       console.log('Feedback registrado localmente');
     }
@@ -550,42 +643,26 @@ export default function App() {
     const produto = produtos.find(p => p.id === produtoAnuncioId || p.id === parseInt(produtoAnuncioId));
     if (!produto) return;
 
-    const apiKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (!apiKey) {
-      alert('Chave VITE_GEMINI_API_KEY não configurada no ambiente.');
-      return;
-    }
-
     setGerandoIA(true);
     try {
-      const prompt = `Crie um anúncio altamente persuasivo e profissional para venda em marketplaces (Mercado Livre, Shopee, OLX) do seguinte produto impresso em 3D:
-Nome do produto: ${produto.nome}
-Peso: ${produto.peso_g || 'não informado'}g
-Preço sugerido de venda: R$ ${produto.preco_sugerido}
-
-Estruture o anúncio da seguinte forma:
-1. Título Chamativo e Otimizado para SEO (com palavras-chave relevantes).
-2. Descrição Atraente e Persuasiva destacando a alta qualidade da impressão 3D, durabilidade e usos recomendados.
-3. Especificações Técnicas (material premium, acabamento, peso).
-4. Chamada para Ação (CTA) incentivando a compra imediata.
-5. Tags/Palavras-chave separadas por vírgula para ajudar nas buscas.`;
-
       const response = await fetch("https://dafrfrwnwvnrysjtmjro.supabase.co/functions/v1/generate-listing", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
-      },
-      body: JSON.stringify({
-        productName: produto_nome, // Ou a variável que guarda o nome do produto no seu estado
-        material: 'Impressão 3D',       // Ou a variável do material
-        preco: produto.preco_sugerido         // Ou a variável do preço
-      })
-    });
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+        },
+        body: JSON.stringify({
+          productName: produto.nome,
+          material: 'Impressão 3D',
+          preco: produto.preco_sugerido
+        })
+      });
 
-    const resultData = await response.json();
+      const resultData = await response.json();
 
-      if (resultData && resultData.candidates && resultData.candidates[0]?.content?.parts[0]?.text) {
+      if (resultData && resultData.text) {
+        setTextoAnuncioGerado(resultData.text);
+      } else if (resultData && resultData.candidates && resultData.candidates[0]?.content?.parts[0]?.text) {
         setTextoAnuncioGerado(resultData.candidates[0].content.parts[0].text);
       } else {
         alert('Não foi possível gerar o anúncio pela IA.');
@@ -593,7 +670,8 @@ Estruture o anúncio da seguinte forma:
     } catch (error) {
       console.error('Erro ao chamar IA:', error);
       alert('Erro ao conectar com o serviço de IA.');
-    } finally {
+    }
+    finally {
       setGerandoIA(false);
     }
   };
@@ -625,6 +703,74 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
     return <div className="min-h-screen bg-slate-950 flex items-center justify-center text-white">Carregando sistema SaaS...</div>;
   }
 
+  // --- COMPONENTE DO FORMULÁRIO DE SUGESTÃO / FEEDBACK ---
+  const renderFormularioSugestao = () => (
+    <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl space-y-4">
+      <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+        <MessageSquare className="w-5 h-5 text-indigo-400" />
+        <h3 className="text-lg font-bold text-white">Enviar Sugestão ou Relatar um Erro</h3>
+      </div>
+      <p className="text-xs text-slate-400">
+        Suas mensagens e sugestões são enviadas diretamente para os desenvolvedores da plataforma.
+      </p>
+
+      {feedbackSucesso && (
+        <div className="bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 p-3 rounded-lg text-xs font-semibold">
+          {feedbackSucesso}
+        </div>
+      )}
+
+      <form onSubmit={enviarFeedback} className="space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label className="text-xs font-semibold text-slate-300">Tipo de Mensagem</label>
+            <select 
+              value={formFeedback.tipo} 
+              onChange={e => setFormFeedback({ ...formFeedback, tipo: e.target.value })}
+              className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-200 mt-1 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="sugestao">Sugestão de Melhoria</option>
+              <option value="bug">Relatar Erro / Bug</option>
+              <option value="duvida">Dúvida ou Outro</option>
+            </select>
+          </div>
+
+          {!session && (
+            <div>
+              <label className="text-xs font-semibold text-slate-300">Seu E-mail (Opcional)</label>
+              <input 
+                type="email" 
+                placeholder="seu@email.com" 
+                value={formFeedback.email} 
+                onChange={e => setFormFeedback({ ...formFeedback, email: e.target.value })}
+                className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-white mt-1 focus:outline-none focus:border-indigo-500" 
+              />
+            </div>
+          )}
+        </div>
+
+        <div>
+          <label className="text-xs font-semibold text-slate-300">Sua Mensagem *</label>
+          <textarea 
+            required 
+            rows={3} 
+            placeholder="Descreva aqui sua idéia, sugestão de recurso ou problema que você encontrou..." 
+            value={formFeedback.mensagem} 
+            onChange={e => setFormFeedback({ ...formFeedback, mensagem: e.target.value })}
+            className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs text-white mt-1 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+
+        <button 
+          type="submit" 
+          className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2.5 px-5 rounded-lg text-xs transition flex items-center gap-2 shadow-lg shadow-indigo-600/20"
+        >
+          <Send className="w-3.5 h-3.5" /> Enviar Mensagem
+        </button>
+      </form>
+    </div>
+  );
+
   if (!session) {
     return (
       <div className="min-h-screen bg-slate-950 text-slate-100 font-sans flex flex-col justify-between">
@@ -641,6 +787,8 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
             </div>
             <div className="flex items-center gap-3">
               <a href="#planos" className="text-sm text-slate-400 hover:text-white transition hidden sm:inline">Planos</a>
+              <a href="#avaliacoes" className="text-sm text-slate-400 hover:text-white transition hidden sm:inline">Avaliações</a>
+              <a href="#sugestoes" className="text-sm text-slate-400 hover:text-white transition hidden sm:inline">Sugestões</a>
               <button 
                 onClick={() => { setAuthMode('login'); setAuthError(''); setAuthSuccess(''); window.scrollTo({ top: 0, behavior: 'smooth' }); }}
                 className="text-sm bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg font-medium transition"
@@ -779,6 +927,7 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
           </div>
         </section>
 
+        {/* --- SEÇÃO DE PLANOS --- */}
         <section id="planos" className="py-16 max-w-6xl mx-auto px-4 space-y-12">
           <div className="text-center max-w-2xl mx-auto space-y-3">
             <h2 className="text-3xl font-extrabold text-white">Planos simples e transparentes</h2>
@@ -813,7 +962,7 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
               </div>
               <div className="space-y-4">
                 <h3 className="text-xl font-bold text-white">Plano PRO (SaaS)</h3>
-                <div className="text-3xl font-black text-indigo-400">R$ 49,90 <span className="text-xs text-slate-500 font-normal">/ mês</span></div>
+                <div className="text-3xl font-black text-indigo-400">R$ 19,90 <span className="text-xs text-slate-500 font-normal">/ mês</span></div>
                 <ul className="space-y-3 text-xs text-slate-300">
                   <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Impressoras e Frota <strong>Ilimitadas</strong></li>
                   <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Produtos e Estoque <strong>Ilimitados</strong></li>
@@ -832,12 +981,114 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
           </div>
         </section>
 
+        {/* --- SEÇÃO DE AVALIAÇÕES (LANDING PAGE - PÚBLICA) --- */}
+        <section id="avaliacoes" className="py-16 bg-slate-900/50 border-y border-slate-800">
+          <div className="max-w-6xl mx-auto px-4 space-y-12">
+            <div className="text-center max-w-2xl mx-auto space-y-3">
+              <h2 className="text-3xl font-extrabold text-white flex items-center justify-center gap-2">
+                <Star className="w-7 h-7 text-yellow-400 fill-yellow-400" /> Avaliações dos Nossos Usuários
+              </h2>
+              <p className="text-slate-400 text-sm">
+                Veja o que os criadores e donos de Print Farm estão achando da nossa plataforma.
+              </p>
+            </div>
+
+            {/* Formulário para Enviar Avaliação Pública */}
+            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl max-w-2xl mx-auto space-y-4 shadow-xl">
+              <h3 className="text-lg font-bold text-white text-center">Deixe sua Avaliação Pública</h3>
+              <form onSubmit={enviarAvaliacao} className="space-y-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300">Seu Nome / Empresa</label>
+                    <input 
+                      type="text" 
+                      required 
+                      placeholder="Ex: João da Silva (3D Print)" 
+                      value={novaAvaliacao.nome} 
+                      onChange={e => setNovaAvaliacao({ ...novaAvaliacao, nome: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-white mt-1 focus:outline-none focus:border-indigo-500" 
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-300">Sua Nota</label>
+                    <select 
+                      value={novaAvaliacao.nota} 
+                      onChange={e => setNovaAvaliacao({ ...novaAvaliacao, nota: e.target.value })}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-yellow-400 mt-1 focus:outline-none focus:border-indigo-500 font-bold"
+                    >
+                      <option value="5">⭐⭐⭐⭐⭐ (5 / 5 - Excelente)</option>
+                      <option value="4">⭐⭐⭐⭐ (4 / 5 - Muito Bom)</option>
+                      <option value="3">⭐⭐⭐ (3 / 5 - Bom)</option>
+                      <option value="2">⭐⭐ (2 / 5 - Regular)</option>
+                      <option value="1">⭐ (1 / 5 - Ruim)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-slate-300">Seu Comentário</label>
+                  <textarea 
+                    required 
+                    rows={3} 
+                    placeholder="Conte como o sistema te ajudou a gerenciar sua produção 3D..." 
+                    value={novaAvaliacao.comentario} 
+                    onChange={e => setNovaAvaliacao({ ...novaAvaliacao, comentario: e.target.value })}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-lg p-3 text-xs text-white mt-1 focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+
+                <button 
+                  type="submit" 
+                  className="w-full bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold py-3 rounded-lg text-xs transition shadow-lg shadow-yellow-500/10 flex items-center justify-center gap-2"
+                >
+                  <Star className="w-4 h-4 fill-slate-950" /> Publicar Avaliação
+                </button>
+              </form>
+            </div>
+
+            {/* Lista de Avaliações Públicas */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+              {avaliacoesList.length === 0 ? (
+                <div className="col-span-full text-center py-8 text-slate-500 text-sm">
+                  Nenhuma avaliação publicada ainda. Seja o primeiro a avaliar!
+                </div>
+              ) : (
+                avaliacoesList.map(item => (
+                  <div key={item.id || Math.random()} className="bg-slate-900 border border-slate-800 p-5 rounded-2xl flex flex-col justify-between space-y-4">
+                    <div className="space-y-2">
+                      <div className="flex justify-between items-center">
+                        <span className="font-bold text-white text-sm">{item.nome}</span>
+                        <span className="text-xs text-yellow-400 font-bold">
+                          {'★'.repeat(item.nota || 5)}{'☆'.repeat(5 - (item.nota || 5))}
+                        </span>
+                      </div>
+                      <p className="text-slate-300 text-xs italic leading-relaxed">"{item.comentario}"</p>
+                    </div>
+                    {item.data && (
+                      <span className="text-[10px] text-slate-500 text-right block border-t border-slate-800/80 pt-2">
+                        {item.data}
+                      </span>
+                    )}
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </section>
+
+        {/* --- SEÇÃO DE SUGESTÕES DA LANDING PAGE --- */}
+        <section id="sugestoes" className="py-16 max-w-4xl mx-auto px-4 w-full">
+          {renderFormularioSugestao()}
+        </section>
+
         <footer className="border-t border-slate-800 bg-slate-950 py-8 text-center text-xs text-slate-500">
           <p>© 2026 3D Print Manager. Todos os direitos reservados.</p>
         </footer>
       </div>
     );
   }
+
+  const isAdmin = session?.user?.email === ADMIN_EMAIL;
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
@@ -859,6 +1110,7 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
               { id: 'produtos', label: 'Produtos', icon: ShoppingCart },
               { id: 'anuncios', label: 'Anúncios', icon: Megaphone },
               { id: 'encomendas', label: 'Encomendas', icon: ListOrdered },
+              { id: 'sugestoes', label: isAdmin ? 'Sugestões (Admin)' : 'Sugestões', icon: MessageSquare },
               { id: 'planos', label: 'Planos SaaS', icon: CreditCard }
             ].map(tab => {
               const Icon = tab.icon;
@@ -1394,20 +1646,33 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
                 </span>
               )}
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-              {produtos.map(p => (
-                <div key={p.id} className="bg-slate-900 p-4 rounded-lg border border-slate-700 flex flex-col justify-between space-y-2">
-                  <div>
-                    <h3 className="font-bold text-slate-100">{p.nome}</h3>
-                    <p className="text-xs text-slate-400">Custo: R$ {p.custo_total}</p>
+            {produtos.length === 0 ? (
+              <p className="text-sm text-slate-400 py-6 text-center">
+                Nenhum produto cadastrado.
+              </p>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                {produtos.map(p => (
+                  <div key={p.id} className="bg-slate-900 p-4 rounded-lg border border-slate-700 flex flex-col justify-between space-y-2">
+                    <div>
+                      <h3 className="font-bold text-slate-100">{p.nome}</h3>
+                      <p className="text-xs text-slate-400">Custo: R$ {p.custo_total}</p>
+                    </div>
+                    <div className="flex justify-between items-center pt-2 border-t border-slate-800">
+                      <span className="text-emerald-400 font-bold text-base">R$ {p.preco_sugerido}</span>
+                      <button
+                        type="button"
+                        onClick={() => excluirProduto(p.id)}
+                        className="text-rose-400"
+                        aria-label={`Excluir ${p.nome}`}
+                      >
+                        <Trash2 className="w-4 h-4" aria-hidden="true" />
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex justify-between items-center pt-2 border-t border-slate-800">
-                    <span className="text-emerald-400 font-bold text-base">R$ {p.preco_sugerido}</span>
-                    <button onClick={() => excluirProduto(p.id)} className="text-rose-400"><Trash2 className="w-4 h-4" /></button>
-                  </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -1545,58 +1810,142 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
           </div>
         )}
 
+        {abaAtiva === 'sugestoes' && (
+          <div className="space-y-6 max-w-4xl mx-auto">
+            {renderFormularioSugestao()}
+
+            {/* PAINEL EXCLUSIVO DO ADMIN PARA VER AS SUGESTÕES RECEBIDAS */}
+            {isAdmin ? (
+              <div className="bg-slate-800 p-6 rounded-xl border border-indigo-500/50 space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-700 pb-3">
+                  <div className="flex items-center gap-2">
+                    <Shield className="w-5 h-5 text-indigo-400" />
+                    <h3 className="text-lg font-bold text-white">Painel de Sugestões Recebidas (Exclusivo Admin)</h3>
+                  </div>
+                  <span className="text-xs bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 px-3 py-1 rounded-full font-bold">
+                    {feedbacksAdminList.length} mensagens
+                  </span>
+                </div>
+
+                {feedbacksAdminList.length === 0 ? (
+                  <p className="text-xs text-slate-400 text-center py-6">
+                    Nenhuma sugestão ou feedback recebido ainda.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {feedbacksAdminList.map(item => (
+                      <div key={item.id} className="bg-slate-900 p-4 rounded-xl border border-slate-700 space-y-2">
+                        <div className="flex justify-between items-center text-xs">
+                          <span className="font-bold text-indigo-400 uppercase tracking-wider">
+                            [{item.tipo || 'Sugestão'}]
+                          </span>
+                          <span className="text-slate-500">
+                            De: {item.email || 'Anônimo'}
+                          </span>
+                        </div>
+                        <p className="text-slate-200 text-sm leading-relaxed">{item.mensagem}</p>
+                        {item.created_at && (
+                          <span className="text-[10px] text-slate-500 block text-right">
+                            {new Date(item.created_at).toLocaleString('pt-BR')}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 text-center text-xs text-slate-400">
+                🔒 O histórico de feedbacks enviados é privado e acessível apenas pelos administradores da plataforma.
+              </div>
+            )}
+          </div>
+        )}
+
         {abaAtiva === 'planos' && (
-          <div className="space-y-6 max-w-3xl mx-auto">
+          <div className="space-y-6 max-w-4xl mx-auto">
             <div className="text-center space-y-2">
-              <h2 className="text-2xl font-extrabold text-white">Escolha o Plano Ideal para sua Print Farm</h2>
-              <p className="text-slate-400 text-sm">Automatize suas cobranças e escale seu negócio de impressão 3D.</p>
+              <h2 className="text-2xl font-extrabold text-white">Upgrade de Assinatura SaaS</h2>
+              <p className="text-slate-400 text-sm">Escalabilidade total e recursos sem limites para sua Print Farm.</p>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-              <div className={`bg-slate-800 p-6 rounded-xl border ${userPlan === 'gratuito' ? 'border-indigo-500' : 'border-slate-700'} flex flex-col justify-between`}>
-                <div>
-                  <h3 className="text-lg font-bold text-white">Plano Gratuito</h3>
-                  <p className="text-3xl font-extrabold text-indigo-400 mt-2">R$ 0<span className="text-xs text-slate-400 font-normal">/mês</span></p>
-                  <ul className="mt-4 space-y-2 text-xs text-slate-300">
-                    <li>• 1 Impressora cadastrada</li>
-                    <li>• Até 3 produtos no catálogo</li>
-                    <li>• Até 5 filamentos no estoque</li>
-                    <li>• Calculadora: Custo Real (Venda Direta)</li>
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Card das Vantagens PRO */}
+              <div className="bg-slate-800 p-6 rounded-2xl border border-indigo-500/40 space-y-4 flex flex-col justify-between">
+                <div className="space-y-4">
+                  <div className="flex justify-between items-center border-b border-slate-700 pb-3">
+                    <h3 className="text-xl font-bold text-white">Plano PRO Completo</h3>
+                    <span className="bg-indigo-600/30 text-indigo-400 border border-indigo-500/30 text-[10px] font-extrabold px-3 py-1 rounded-full uppercase">
+                      Upgrade Imediato
+                    </span>
+                  </div>
+
+                  <div className="text-3xl font-black text-indigo-400">
+                    R$ {VALOR_PRO.toFixed(2).replace('.', ',')} <span className="text-xs text-slate-500 font-normal">/ mês</span>
+                  </div>
+
+                  <ul className="space-y-2.5 text-xs text-slate-300">
+                    <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Frota de Impressoras Ilimitada</li>
+                    <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Produtos e Estoque Ilimitados</li>
+                    <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Módulo SLA (Resina e Pós-processamento)</li>
+                    <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Precificação Shopee, Mercado Livre e TikTok</li>
+                    <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Gerador Inteligente de Anúncios com IA</li>
                   </ul>
                 </div>
-                <button disabled={userPlan === 'gratuito'} className="mt-6 w-full bg-slate-700 text-slate-300 py-2.5 rounded-lg text-sm font-medium">
-                  {userPlan === 'gratuito' ? 'Plano Atual' : 'Selecionar'}
-                </button>
+
+                <div className="bg-slate-900/60 p-4 rounded-xl border border-slate-700/60 text-xs text-slate-400 space-y-1">
+                  <p className="font-semibold text-slate-200">Como funciona o ativamento?</p>
+                  <p>Após realizar a transferência PIX, envie o comprovante clicando no botão do WhatsApp ao lado para liberarmos seu acesso PRO na hora.</p>
+                </div>
               </div>
 
-              <div className={`bg-slate-800 p-6 rounded-xl border ${userPlan === 'pro' ? 'border-emerald-500' : 'border-indigo-500/50'} flex flex-col justify-between shadow-xl`}>
-                <div>
-                  <div className="flex justify-between items-center">
-                    <h3 className="text-lg font-bold text-white">Plano Pro (SaaS)</h3>
-                    <span className="bg-indigo-600 text-white text-[10px] font-bold px-2 py-0.5 rounded">RECOMENDADO</span>
-                  </div>
-                  <p className="text-3xl font-extrabold text-emerald-400 mt-2">R$ 49,90<span className="text-xs text-slate-400 font-normal">/mês</span></p>
-                  <ul className="mt-4 space-y-2 text-xs text-slate-300">
-                    <li>• Impressoras e frota ilimitadas</li>
-                    <li>• Produtos e estoque ilimitados</li>
-                    <li>• Calculadora Mercado Livre, Shopee & TikTok</li>
-                    <li>• Módulo Completo de Resina (SLA/MSLA)</li>
-                  </ul>
+              {/* PASSO 1: CARD DE PAGAMENTO PIX ESTÁTICO DENTRO DO APP */}
+              <div className="bg-slate-800 p-6 rounded-2xl border border-slate-700 space-y-5 text-center flex flex-col items-center justify-between">
+                <div className="space-y-1 w-full">
+                  <h3 className="text-lg font-bold text-white flex items-center justify-center gap-2">
+                    <QrCode className="w-5 h-5 text-emerald-400" /> Pagamento via PIX (Sem Taxas)
+                  </h3>
+                  <p className="text-xs text-slate-400">Escaneie o QR Code abaixo com seu aplicativo do banco</p>
                 </div>
-                <button 
-                  onClick={async () => {
-                    alert('Ativando Plano Pro...');
-                    await supabase.from('profiles').update({ plano: 'pro' }).eq('id', session.user.id);
-                    setUserPlan('pro');
-                  }} 
-                  className="mt-6 w-full bg-emerald-600 hover:bg-emerald-500 text-white py-2.5 rounded-lg text-sm font-medium transition"
-                >
-                  {userPlan === 'pro' ? 'Plano Pro Ativo' : 'Assinar Plano PRO'}
-                </button>
+
+                <div className="bg-white p-3 rounded-xl shadow-lg border border-slate-200 inline-block">
+                  <img 
+                    src={qrCodeUrl} 
+                    alt="QR Code PIX para Assinatura PRO" 
+                    className="w-48 h-48 mx-auto"
+                  />
+                </div>
+
+                <div className="w-full space-y-3">
+                  <div className="bg-slate-900 p-2.5 rounded-lg border border-slate-700 flex items-center justify-between text-xs">
+                    <span className="text-slate-400 truncate max-w-[200px] text-left">{payloadPix}</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(payloadPix);
+                        setCopiadoPix(true);
+                        setTimeout(() => setCopiadoPix(false), 2000);
+                      }}
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-3 py-1.5 rounded text-[11px] flex items-center gap-1 shrink-0 transition"
+                    >
+                      {copiadoPix ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                      {copiadoPix ? 'Copiado!' : 'Copiar PIX'}
+                    </button>
+                  </div>
+
+                  <a
+                    href={`https://wa.me/${SEU_NUMERO_WHATSAPP}?text=${encodeURIComponent(`Olá! Realizei o pagamento do Plano PRO do 3D Print Manager no valor de R$ ${VALOR_PRO.toFixed(2)} para o e-mail:${session?.user?.email}. Segue o comprovante em anexo:`)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3 px-4 rounded-xl text-xs transition flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/20"
+                  >
+                    <Phone className="w-4 h-4" /> Enviar Comprovante no WhatsApp
+                  </a>
+                </div>
               </div>
             </div>
           </div>
         )}
+
       </main>
     </div>
   );
