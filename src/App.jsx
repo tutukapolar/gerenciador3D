@@ -226,7 +226,7 @@ export default function App() {
     }
   };
 
-  const carregarDados = async (userId) => {
+    const carregarDados = async (userId) => {
     try {
       const [filRes, prodRes, encRes, impRes, profRes] = await Promise.all([
         supabase.from('estoque_filamentos').select('*').eq('user_id', userId),
@@ -247,6 +247,7 @@ export default function App() {
       console.error('Erro ao carregar dados:', error);
     }
   };
+
 
   const handleAuth = async (e) => {
     e.preventDefault();
