@@ -226,27 +226,54 @@ export default function App() {
     }
   };
 
-    const carregarDados = async (userId) => {
+     const carregarDados = async (userId) => {
     try {
       const [filRes, prodRes, encRes, impRes, profRes] = await Promise.all([
         supabase.from('estoque_filamentos').select('*').eq('user_id', userId),
         supabase.from('produtos').select('*').eq('user_id', userId),
         supabase.from('encomendas').select('*').eq('user_id', userId),
         supabase.from('impressoras').select('*').eq('user_id', userId),
-        supabase.from('profiles').select('plano').eq('id', userId).maybeSingle()
+        // Buscamos o plano e a data de expiração juntos do Supabase
+        supabase.from('profiles').select('plano, data_expiracao').eq('id', userId).maybeSingle()
       ]);
 
       if (filRes.data) setFilamentos(filRes.data);
       if (prodRes.data) setProdutos(prodRes.data);
       if (encRes.data) setEncomendas(encRes.data);
       if (impRes.data) setImpressoras(impRes.data);
-      if (profRes.data && profRes.data.plano) {
-        setUserPlan(profRes.data.plano);
+      
+      if (profRes.data) {
+        const planoAtual = profRes.data.plano || 'gratuito';
+        const dataExpiracaoStr = profRes.data.data_expiracao;
+
+        // Se o plano for PRO, validamos se ele ainda está dentro do prazo de validade
+        if (planoAtual === 'pro' && dataExpiracaoStr) {
+          const agoraMs = Date.now();
+          const vencimentoMs = Date.parse(dataExpiracaoStr);
+
+          // Se a data já passou (está no passado) ou se a conversão falhar
+          if (isNaN(vencimentoMs) || agoraMs > vencimentoMs) {
+            setUserPlan('gratuito');
+            
+            // Faz o downgrade automático direto na tabela do Supabase
+            await supabase
+              .from('profiles')
+              .update({ plano: 'gratuito' })
+              .eq('id', userId);
+              
+            console.log("Plano PRO expirado com sucesso.");
+          } else {
+            setUserPlan('pro');
+          }
+        } else {
+          setUserPlan(planoAtual);
+        }
       }
     } catch (error) {
       console.error('Erro ao carregar dados:', error);
     }
   };
+
 
 
   const handleAuth = async (e) => {
