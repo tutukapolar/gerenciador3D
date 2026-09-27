@@ -1,7 +1,7 @@
 {
   "homepage": "https://tutukapolar.github.io/gerenciador3D",
   "name": "negocio-3dD",
-  "private": true,
+  "private": false,
   "version": "0.0.0",
   "type": "module",
   "scripts": {
