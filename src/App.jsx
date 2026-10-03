@@ -175,6 +175,8 @@ export default function App() {
   const [copiadoPix, setCopiadoPix] = useState(false);
   const [gerandoIA, setGerandoIA] = useState(false);
   const [textoAnuncioGerado, setTextoAnuncioGerado] = useState('');
+  const [tomAnuncio, setTomAnuncio] = useState('persuasivo');
+  const [plataformaAnuncio, setPlataformaAnuncio] = useState('shopee');
 
   // Payload do PIX do Passo 1
   const payloadPix = gerarPayloadPix({
@@ -716,7 +718,7 @@ useEffect(() => {
     setEncomendas(encomendas.filter(e => e.id !== id));
   };
 
-  const handleGerarAnuncioIA = async () => {
+const handleGerarAnuncioIA = async () => {
     const produto = produtos.find(p => p.id === produtoAnuncioId || p.id === parseInt(produtoAnuncioId));
     if (!produto) return;
 
@@ -730,8 +732,11 @@ useEffect(() => {
         },
         body: JSON.stringify({
           productName: produto.nome,
-          material: 'Impressão 3D',
-          preco: produto.preco_sugerido
+          material: 'Impressão 3D Premium',
+          preco: produto.preco_sugerido,
+          pesoG: produto.peso_g,
+          tom: tomAnuncio,             // Novo parâmetro enviado
+          plataforma: plataformaAnuncio // Novo parâmetro enviado
         })
       });
 
@@ -747,12 +752,11 @@ useEffect(() => {
     } catch (error) {
       console.error('Erro ao chamar IA:', error);
       alert('Erro ao conectar com o serviço de IA.');
-    }
-    finally {
+    } finally {
       setGerandoIA(false);
     }
   };
-
+  
   const faturamentoTotal = encomendas.reduce((acc, curr) => acc + (parseFloat(curr.valor_total) || 0), 0);
   const produtoAnuncio = produtos.find(p => p.id === produtoAnuncioId || p.id === parseInt(produtoAnuncioId));
 
@@ -1753,53 +1757,88 @@ Produzido com tecnologia de Impressão 3D profissional, garantindo resistência 
           </div>
         )}
 
-        {abaAtiva === 'anuncios' && (
-          <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 space-y-4">
-            <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
-              <h2 className="text-lg font-bold text-slate-200">Gerador de Anúncios para Marketplaces</h2>
-              
-              {produtoAnuncio && (
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={handleGerarAnuncioIA}
-                    disabled={gerandoIA}
-                    className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm transition font-medium shadow-md shadow-purple-600/30 disabled:opacity-50"
-                  >
-                    <Wand2 className={`w-4 h-4 ${gerandoIA ? 'animate-spin' : ''}`} />
-                    {gerandoIA ? 'Gerando Anúncio...' : 'Gerar Anúncio com IA'}
-                  </button>
-
-                  <button 
-                    onClick={() => {
-                      const textoParaCopiar = textoAnuncioGerado || obterTextoPadraoAnuncio();
-                      navigator.clipboard.writeText(textoParaCopiar);
-                      setCopiado(true);
-                      setTimeout(() => setCopiado(false), 2000);
-                    }}
-                    className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm transition"
-                  >
-                    {copiado ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                    {copiado ? 'Copiado!' : 'Copiar Anúncio'}
-                  </button>
-                </div>
-              )}
-            </div>
-            
-            <select value={produtoAnuncioId} onChange={e => { setProdutoAnuncioId(e.target.value); setTextoAnuncioGerado(''); }} className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-sm text-slate-200">
-              <option value="">Selecione um produto salvo...</option>
-              {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
-            </select>
+     {abaAtiva === 'anuncios' && (
+        <div className="bg-slate-800 p-6 rounded-xl border border-slate-700 space-y-4">
+          <div className="flex justify-between items-center mb-4 flex-wrap gap-2">
+            <h2 className="text-lg font-bold text-slate-200">Gerador de Anúncios com IA</h2>
             
             {produtoAnuncio && (
-              <textarea 
-                rows={14} 
-                onChange={e => setTextoAnuncioGerado(e.target.value)}
-                value={textoAnuncioGerado || obterTextoPadraoAnuncio()} 
-                className="w-full bg-slate-900 border border-slate-700 rounded p-4 text-sm text-slate-300 font-mono focus:border-indigo-500 focus:outline-none" 
-              />
+              <div className="flex items-center gap-2">
+                <button 
+                  onClick={handleGerarAnuncioIA}
+                  disabled={gerandoIA}
+                  className="flex items-center gap-2 bg-purple-600 hover:bg-purple-500 text-white px-4 py-2 rounded-lg text-sm transition font-medium shadow-md shadow-purple-600/30 disabled:opacity-50"
+                >
+                  <Wand2 className={`w-4 h-4 ${gerandoIA ? 'animate-spin' : ''}`} />
+                  {gerandoIA ? 'Gerando Anúncio...' : 'Gerar Anúncio com IA'}
+                </button>
+
+                <button 
+                  onClick={() => {
+                    const textoParaCopiar = textoAnuncioGerado || obterTextoPadraoAnuncio();
+                    navigator.clipboard.writeText(textoParaCopiar);
+                    setCopiado(true);
+                    setTimeout(() => setCopiado(false), 2000);
+                  }}
+                  className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-sm transition"
+                >
+                  {copiado ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+                  {copiado ? 'Copiado!' : 'Copiar Anúncio'}
+                </button>
+              </div>
             )}
           </div>
-        )}
+          
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Produto</label>
+              <select 
+                value={produtoAnuncioId} 
+                onChange={e => { setProdutoAnuncioId(e.target.value); setTextoAnuncioGerado(''); }} 
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-sm text-slate-200"
+              >
+                <option value="">Selecione um produto salvo...</option>
+                {produtos.map(p => <option key={p.id} value={p.id}>{p.nome}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Tom de Voz</label>
+              <select 
+                value={tomAnuncio} 
+                onChange={e => setTomAnuncio(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-sm text-slate-200"
+              >
+                <option value="persuasivo">🔥 Persuasivo / Vendas</option>
+                <option value="tecnico">📐 Técnico / Detalhado</option>
+                <option value="descontraido">😊 Descontraído / Jovem</option>
+              </select>
+            </div>
+
+            <div>
+              <label className="text-xs text-slate-400 block mb-1">Plataforma</label>
+              <select 
+                value={plataformaAnuncio} 
+                onChange={e => setPlataformaAnuncio(e.target.value)}
+                className="w-full bg-slate-900 border border-slate-700 rounded p-2.5 text-sm text-slate-200"
+              >
+                <option value="shopee">Shopee (Foco em cupom/frete)</option>
+                <option value="mercadolivre">Mercado Livre (Foco em qualidade/especificações)</option>
+                <option value="instagram">Instagram / TikTok (Legenda + hashtags)</option>
+              </select>
+            </div>
+          </div>
+          
+          {produtoAnuncio && (
+            <textarea 
+              rows={14} 
+              onChange={e => setTextoAnuncioGerado(e.target.value)}
+              value={textoAnuncioGerado || obterTextoPadraoAnuncio()} 
+              className="w-full bg-slate-900 border border-slate-700 rounded p-4 text-sm text-slate-300 font-mono focus:border-indigo-500 focus:outline-none" 
+            />
+          )}
+        </div>
+      )}
 
         {abaAtiva === 'encomendas' && (
           <div className="space-y-6">
