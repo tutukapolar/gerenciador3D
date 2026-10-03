@@ -5,7 +5,7 @@ import {
   Package, 
   ShoppingCart, 
   ListOrdered, 
-  Trash2, 
+  Trash2,
   Plus, 
   Box,
   TrendingUp,
@@ -350,27 +350,76 @@ export default function App() {
     setTimeout(() => setFeedbackSucesso(''), 4000);
   };
 
-  const importarDadosLink = async () => {
-    if (!linkMakerworld) return;
-    try {
+ // -------------------------------------------------------------
+// 1. ATUALIZAÇÃO DA FUNÇÃO DE IMPORTAÇÃO MAKERWORLD (SCRAPING REAL)
+// -------------------------------------------------------------
+const importarDadosLink = async () => {
+  if (!linkMakerworld) return;
+  try {
+    // Chamada à Edge Function do Supabase responsável por desviar de CORS/Cloudflare
+    const response = await fetch("https://dafrfrwnwvnrysjtmjro.supabase.co/functions/v1/makerworld-scraper", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${import.meta.env.VITE_SUPABASE_ANON_KEY}`
+      },
+      body: JSON.stringify({ url: linkMakerworld })
+    });
+
+    const data = await response.json();
+
+    if (data && !data.error) {
       setCalcData(prev => ({
         ...prev,
-        nomeItem: 'Modelo Extraído (MakerWorld API)',
-        tempoHoras: '4.5'
+        nomeItem: data.title || 'Modelo MakerWorld',
+        tempoHoras: (data.printTimeMinutes / 60).toFixed(2) || '1.0'
       }));
-      if (tipoTecnologia === 'FDM' && filamentos.length > 0) {
+
+      if (tipoTecnologia === 'FDM' && data.weightGramas) {
         setFilamentosProjeto([
-          { idTemp: Date.now(), filamentoId: filamentos[0].id.toString(), pesoGramas: '95' }
+          { idTemp: Date.now(), filamentoId: filamentos[0]?.id?.toString() || '', pesoGramas: data.weightGramas.toString() }
         ]);
-      } else if (tipoTecnologia === 'Resina') {
-        setResinaProjeto(prev => ({ ...prev, volumeMl: '45' }));
       }
-      alert('Dados do link extraídos com sucesso via Web Scraping!');
-    } catch (err) {
-      alert('Erro ao realizar scraping do link.');
+      alert('Dados do MakerWorld importados com sucesso!');
+    } else {
+      alert('Não foi possível extrair os dados diretamente. Verifique a URL.');
+    }
+  } catch (err) {
+    console.error('Erro na extração do MakerWorld:', err);
+    alert('Erro ao conectar com o serviço de scraping do MakerWorld.');
+  }
+};
+
+// -------------------------------------------------------------
+// 2. ADIÇÃO DO SUPORTE A RECEBIMENTO AUTOMÁTICO DO SLICER (WEBHOOK)
+// -------------------------------------------------------------
+useEffect(() => {
+  // Listener para capturar dados vindos de extensões de navegador ou script do Slicer
+  const handleSlicerData = (event) => {
+    if (event.data && event.data.source === '3D_SLICER_INTEGRATION') {
+      const { nomeModel, tempoMinutos, pesoGramos, tecnologia } = event.data;
+      
+      if (tecnologia) setTipoTecnologia(tecnologia);
+
+      setCalcData(prev => ({
+        ...prev,
+        nomeItem: nomeModel || prev.nomeItem,
+        tempoHoras: (tempoMinutos / 60).toFixed(2)
+      }));
+
+      if (pesoGramos && filamentos.length > 0) {
+        setFilamentosProjeto([
+          { idTemp: Date.now(), filamentoId: filamentos[0].id.toString(), pesoGramas: pesoGramos.toString() }
+        ]);
+      }
+      alert(`Dados recebidos do Slicer para: ${nomeModel}`);
     }
   };
 
+  window.addEventListener('message', handleSlicerData);
+  return () => window.removeEventListener('message', handleSlicerData);
+}, [filamentos]);
+  
   const adicionarImpressora = async (e) => {
     e.preventDefault();
     if (!novaImpressora.nome) return;
